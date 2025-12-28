@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <title>Sanal Sergi - Hedef Listesi</title>
+  <style>
+    body { margin: 0; overflow: hidden; font-family: sans-serif; background:#111; color:#ddd; }
+    #info {
+      position: absolute; left: 10px; top: 10px; z-index: 10;
+      background: rgba(0,0,0,0.6); padding:10px; border-radius:6px; pointer-events: none;
+    }
+    #info b { color: #ffcc00; }
+    #hud {
+      position: absolute; right: 10px; top: 10px; z-index: 11;
+      background: rgba(0,0,0,0.6); padding:10px; border-radius:6px; text-align:right;
+      min-width:180px; font-size: 18px; color: #fff;
+    }
+    #message {
+      position: absolute; left:50%; top:30%; transform: translateX(-50%); z-index: 20;
+      background: rgba(0,0,0,0.9); color: #fff; padding:20px 30px; border-radius:10px; display:none;
+      font-size:24px; text-align: center; border: 2px solid #555;
+    }
+    #crosshair {
+      position: absolute; top: 50%; left: 50%; width: 8px; height: 8px;
+      background: rgba(255, 255, 255, 0.4); border-radius: 50%;
+      transform: translate(-50%, -50%); pointer-events: none;
+    }
+    .target-hint { color: #ff3333; font-weight: bold; font-size: 14px; margin-top: 5px; }
+  </style>
+</head>
+<body>
+  <div id="info">
+    <div><b>Tıkla</b> ve fareyi kilitle.</div>
+    <div><b>W/A/S/D</b> = Hareket, <b>E</b> = Çal</div>
+    <div class="target-hint">GÖREV: Sadece KIRMIZI ÇERÇEVELİ tabloları çal!</div>
+  </div>
+  <div id="crosshair"></div>
+  <div id="hud">
+    <div>Kalan Hedef: <span id="count" style="color:#ff3333">5</span></div>
+  </div>
+  <div id="message"></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/controls/PointerLockControls.js"></script>
+
+  <script>
+  // --- Temel Ayarlar ---
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x1a1a1a);
+  scene.fog = new THREE.Fog(0x1a1a1a, 0, 35); 
+
+  const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+  camera.position.set(0, 1.6, -12); 
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  document.body.appendChild(renderer.domElement);
+
+  const pointerControls = new THREE.PointerLockControls(camera, document.body);
+  const infoDiv = document.getElementById('info');
+  
+  document.body.addEventListener('click', () => { if(!gameEnded) pointerControls.lock(); });
+  pointerControls.addEventListener('lock', () => { infoDiv.style.opacity = '0.3'; });
+  pointerControls.addEventListener('unlock', () => { infoDiv.style.opacity = '1'; });
+
+  const keys = {};
+  window.addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; });
+  window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+  const ambient = new THREE.AmbientLight(0xffffff, 0.4);
+  scene.add(ambient);
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.2);
+  scene.add(hemi);
+
+  // --- Harita (Collision & Walls) ---
+  const corridorLength = 24; const corridorWidth = 4; const corridorHeight = 3.5; const offset = 12; 
+  const outerLimit = offset + (corridorWidth / 2) - 0.3; 
+  const innerLimit = offset - (corridorWidth / 2) + 0.3; 
+
+  function checkCollision(x, z) {
+    if (Math.abs(x) > outerLimit || Math.abs(z) > outerLimit) return true; 
+    if (Math.abs(x) < innerLimit && Math.abs(z) < innerLimit) return true; 
+    return false; 
+  }
+
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0x808080 });
+  const floorMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+  const ceilMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+
+  function createSegment(x, z, rotY) {
+    const group = new THREE.Group();
+    group.position.set(x, 0, z); group.rotation.y = rotY;
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(corridorWidth, corridorLength), floorMat);
+    floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; group.add(floor);
+    const ceil = new THREE.Mesh(new THREE.PlaneGeometry(corridorWidth, corridorLength), ceilMat);
+    ceil.rotation.x = Math.PI / 2; ceil.position.y = corridorHeight; group.add(ceil);
+    const leftW = new THREE.Mesh(new THREE.PlaneGeometry(corridorLength, corridorHeight), wallMat);
+    leftW.position.set(-corridorWidth/2, corridorHeight/2, 0); leftW.rotation.y = Math.PI / 2; group.add(leftW);
+    const rightW = new THREE.Mesh(new THREE.PlaneGeometry(corridorLength, corridorHeight), wallMat);
+    rightW.position.set(corridorWidth/2, corridorHeight/2, 0); rightW.rotation.y = -Math.PI / 2; group.add(rightW);
+    scene.add(group);
+  }
+  createSegment(0, -offset, Math.PI/2); createSegment(0, offset, Math.PI/2);  
+  createSegment(offset, 0, 0); createSegment(-offset, 0, 0);         
+
+  // --- Tablolar ve Hedef Sistemi ---
+  const loader = new THREE.TextureLoader();
+  let allPaintings = []; // Tüm tabloları tutar
+
+  function addPainting(x, z, rotY, id) {
+    const group = new THREE.Group();
+    group.position.set(x, 2, z);
+    group.rotation.y = rotY;
+
+    // 1. Resim
+    const tex = loader.load(`https://picsum.photos/200/300?random=${id}`);
+    const mat = new THREE.MeshStandardMaterial({ map: tex });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 2), mat);
+    // mesh.position.z += 0.05; // Çerçevenin önünde dursun
+    group.add(mesh);
+
+    // 2. Çerçeve (Frame) - Başlangıçta gri
+    const frameGeo = new THREE.BoxGeometry(1.7, 2.2, 0.1);
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x333333 }); 
+    const frame = new THREE.Mesh(frameGeo, frameMat);
+    frame.position.z = -0.06; // Resmin arkasında
+    group.add(frame);
+
+    // Işık
+    const light = new THREE.PointLight(0xffaa00, 0.3, 5);
+    light.position.set(0, 1, 1);
+    group.add(light);
+
+    // Metadata
+    group.userData = { 
+      id: id, 
+      isTarget: false, // Sonradan atanacak
+      frameMesh: frame // Rengini değiştirmek için referans
+    };
+
+    scene.add(group);
+    allPaintings.push(group);
+  }
+
+  // 20 Tabloyu Oluştur
+  for(let i=0; i<5; i++) addPainting(-8 + i*4, -13.9, 0, 100+i);
+  for(let i=0; i<5; i++) addPainting(13.9, -8 + i*4, -Math.PI/2, 200+i);
+  for(let i=0; i<5; i++) addPainting(8 - i*4, 13.9, Math.PI, 300+i);
+  for(let i=0; i<5; i++) addPainting(-13.9, 8 - i*4, Math.PI/2, 400+i);
+
+  // --- Hedef Atama Fonksiyonu (Rastgele 5) ---
+  function assignRandomTargets() {
+    // Önce hepsini sıfırla
+    allPaintings.forEach(p => {
+      p.userData.isTarget = false;
+      p.userData.frameMesh.material = new THREE.MeshStandardMaterial({ color: 0x333333 });
+      p.visible = true; // Yeniden başlatma için görünür yap
+    });
+
+    // Rastgele 5 indeks seç
+    const indices = [];
+    while(indices.length < 5) {
+      const r = Math.floor(Math.random() * allPaintings.length);
+      if(indices.indexOf(r) === -1) indices.push(r);
+    }
+
+    // Seçilenleri işaretle ve Kırmızı Çerçeve yap
+    indices.forEach(idx => {
+      const p = allPaintings[idx];
+      p.userData.isTarget = true;
+      // Parlayan Kırmızı Çerçeve
+      p.userData.frameMesh.material = new THREE.MeshStandardMaterial({ 
+        color: 0xff0000, 
+        emissive: 0xff0000,
+        emissiveIntensity: 0.5
+      });
+    });
+  }
+
+  // --- GÜVENLİK SİSTEMİ (Paranoyak Modu) ---
+  const waypoints = [
+    new THREE.Vector3(-offset, 0.9, -offset), new THREE.Vector3(offset, 0.9, -offset),  
+    new THREE.Vector3(offset, 0.9, offset), new THREE.Vector3(-offset, 0.9, offset)   
+  ];
+
+  class Guard {
+    constructor(color, startWpIndex, startDir) {
+      const geo = new THREE.BoxGeometry(0.8, 1.8, 0.8);
+      const mat = new THREE.MeshStandardMaterial({ color: color });
+      this.mesh = new THREE.Mesh(geo, mat);
+      this.mesh.position.copy(waypoints[startWpIndex]);
+      
+      this.spot = new THREE.SpotLight(0xffffff, 1, 18, Math.PI/5, 0.5);
+      this.spot.position.set(0, 0.5, 0.5); this.spot.target.position.set(0, 0.5, 5);
+      this.mesh.add(this.spot); this.mesh.add(this.spot.target);
+      scene.add(this.mesh);
+
+      this.currentWpIndex = startWpIndex;
+      this.direction = startDir;
+      this.state = 'WALKING';
+      this.scanTimer = 0;
+      this.baseSpeed = 0.06;
+      this.currentSpeed = 0.06;
+    }
+
+    update() {
+      if (this.state === 'WALKING') this.walk();
+      else if (this.state === 'SCANNING') this.scan();
+    }
+
+    walk() {
+      let nextIndex = (this.currentWpIndex + this.direction);
+      if (nextIndex > 3) nextIndex = 0; if (nextIndex < 0) nextIndex = 3;
+      const target = waypoints[nextIndex];
+      const dirVec = new THREE.Vector3().subVectors(target, this.mesh.position);
+      if (dirVec.length() < 0.2) {
+        this.currentWpIndex = nextIndex;
+        this.makeDecision();
+      } else {
+        dirVec.normalize();
+        const wobble = 1 + Math.sin(Date.now() * 0.005) * 0.2; 
+        this.mesh.position.add(dirVec.multiplyScalar(this.currentSpeed * wobble));
+        this.mesh.lookAt(target);
+      }
+    }
+
+    scan() {
+      this.mesh.rotation.y += 0.05;
+      this.scanTimer--;
+      if (this.scanTimer <= 0) {
+        this.state = 'WALKING';
+        this.currentSpeed = this.baseSpeed * 1.5; 
+        setTimeout(() => { this.currentSpeed = this.baseSpeed; }, 2000);
+      }
+    }
+
+    makeDecision() {
+      const roll = Math.random();
+      if (roll < 0.3) { this.state = 'SCANNING'; this.scanTimer = 60 + Math.random() * 60; }
+      else if (roll < 0.5) { this.direction *= -1; }
+    }
+  }
+
+  const guards = [
+    new Guard(0xff0000, 0, 1), 
+    new Guard(0x0044ff, 2, -1)
+  ];
+
+  // --- Oyun Mantığı ---
+  let stolenCount = 0;
+  const targetTotal = 5;
+  let gameEnded = false;
+  const msgEl = document.getElementById('message');
+  const countEl = document.getElementById('count');
+
+  // Oyunu Başlat
+  assignRandomTargets();
+
+  window.addEventListener('keydown', (e) => {
+    if(e.key.toLowerCase() === 'e') trySteal();
+    if(e.key.toLowerCase() === 'r' && gameEnded) {
+      // Sayfayı yenilemeden oyunu resetle
+      gameEnded = false;
+      stolenCount = 0;
+      countEl.innerText = 5;
+      msgEl.style.display = 'none';
+      camera.position.set(0, 1.6, -12);
+      assignRandomTargets(); // YENİ HEDEFLER
+      pointerControls.lock();
+    }
+  });
+
+  function trySteal() {
+    if(gameEnded) return;
+    let nearest = null; let minDist = 2.5;
+    
+    // Görünür olan tablolardan en yakınını bul
+    allPaintings.forEach(p => {
+      if(!p.visible) return;
+      const dist = p.position.distanceTo(camera.position);
+      if(dist < minDist) { minDist = dist; nearest = p; }
+    });
+
+    if(!nearest) { showMessage("Burada tablo yok!", 1000); return; }
+
+    // HEDEF KONTROLÜ
+    if(nearest.userData.isTarget === false) {
+      showMessage("Bu tablo listede yok! Sadece Kırmızıları Çal!", 1500, "red");
+      return;
+    }
+
+    // Yakalanma Kontrolü
+    let caught = false;
+    guards.forEach(g => {
+      if(g.mesh.position.distanceTo(camera.position) < 9) caught = true;
+    });
+
+    if(caught) { gameOver(false); return; }
+
+    // Başarılı Çalma
+    nearest.visible = false; // Sahneden gizle
+    stolenCount++;
+    countEl.innerText = targetTotal - stolenCount;
+    showMessage("Hedef Çalındı!", 1500, "lime");
+
+    if(stolenCount >= targetTotal) gameOver(true);
+  }
+
+  function showMessage(txt, duration, color="white") {
+    msgEl.innerText = txt; 
+    msgEl.style.color = color;
+    msgEl.style.display = 'block';
+    if(duration) setTimeout(() => msgEl.style.display = 'none', duration);
+  }
+
+  function gameOver(win) {
+    gameEnded = true; pointerControls.unlock(); msgEl.style.display = 'block';
+    msgEl.style.color = "white";
+    if(win) msgEl.innerHTML = "<span style='color:#0f0'>GÖREV TAMAMLANDI!</span><br>Siparişleri topladın.<br><small>Yeni görev için R tuşuna bas.</small>";
+    else msgEl.innerHTML = "<span style='color:#f00'>YAKALANDIN!</span><br>Dikkatli ol.<br><small>Tekrar denemek için R tuşuna bas.</small>";
+  }
+
+  function updatePlayerMovement() {
+    if(!pointerControls.isLocked) return;
+    const speed = 0.12;
+    const direction = new THREE.Vector3(); const right = new THREE.Vector3();
+    camera.getWorldDirection(direction); direction.y = 0; direction.normalize();
+    right.crossVectors(camera.up, direction).normalize();
+    
+    const nextPos = camera.position.clone();
+    if(keys['w']) nextPos.add(direction.clone().multiplyScalar(speed));
+    if(keys['s']) nextPos.add(direction.clone().multiplyScalar(-speed));
+    if(keys['a']) nextPos.add(right.clone().multiplyScalar(speed));
+    if(keys['d']) nextPos.add(right.clone().multiplyScalar(-speed));
+
+    if (!checkCollision(nextPos.x, nextPos.z)) {
+      camera.position.x = nextPos.x; camera.position.z = nextPos.z;
+    }
+  }
+
+  // --- Minimap ---
+  const miniCam = new THREE.OrthographicCamera(-18, 18, 18, -18, 1, 100);
+  miniCam.position.set(0, 20, 0); miniCam.lookAt(0,0,0);
+  const pIcon = new THREE.Mesh(new THREE.CircleGeometry(0.6, 16), new THREE.MeshBasicMaterial({ color: 0x00ff00 }));
+  pIcon.rotation.x = -Math.PI/2; pIcon.position.y = 5; scene.add(pIcon);
+  const eIcon1 = new THREE.Mesh(new THREE.CircleGeometry(0.6, 16), new THREE.MeshBasicMaterial({ color: 0xff0000 }));
+  eIcon1.rotation.x = -Math.PI/2; eIcon1.position.y = 5; scene.add(eIcon1);
+  const eIcon2 = new THREE.Mesh(new THREE.CircleGeometry(0.6, 16), new THREE.MeshBasicMaterial({ color: 0x0044ff }));
+  eIcon2.rotation.x = -Math.PI/2; eIcon2.position.y = 5; scene.add(eIcon2);
+
+  function animate() {
+    requestAnimationFrame(animate);
+    if(!gameEnded) {
+      updatePlayerMovement();
+      guards.forEach(g => g.update());
+    }
+    pIcon.position.x = camera.position.x; pIcon.position.z = camera.position.z;
+    eIcon1.position.x = guards[0].mesh.position.x; eIcon1.position.z = guards[0].mesh.position.z;
+    eIcon2.position.x = guards[1].mesh.position.x; eIcon2.position.z = guards[1].mesh.position.z;
+    eIcon1.rotation.z = guards[0].mesh.rotation.y;
+    eIcon2.rotation.z = guards[1].mesh.rotation.y;
+
+    renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
+    renderer.setScissorTest(false); renderer.clear(); renderer.render(scene, camera);
+    const mapSize = 200;
+    renderer.clearDepth(); renderer.setScissorTest(true);
+    renderer.setScissor(window.innerWidth - mapSize - 10, window.innerHeight - mapSize - 10, mapSize, mapSize);
+    renderer.setViewport(window.innerWidth - mapSize - 10, window.innerHeight - mapSize - 10, mapSize, mapSize);
+    renderer.render(scene, miniCam);
+  }
+  animate();
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+  </script>
+</body>
+</html>
