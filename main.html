@@ -85,7 +85,7 @@
       <div style="font-size: 12px; color: #999; margin-top: 3px;"><span id="volumeValue">30</span>%</div>
     </div>
   </div>
-  <audio id="bgMusic" loop>
+  <audio id="bgMusic" loop autoplay>
     <source src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" type="audio/mpeg">
   </audio>
 
@@ -96,7 +96,7 @@
   // --- Temel Ayarlar ---
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x1a1a1a);
-  scene.fog = new THREE.Fog(0x1a1a1a, 0, 35); 
+  scene.fog = new THREE.Fog(0x1a1a1a, 15, 50); 
 
   const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
   camera.position.set(0, 1.6, -12); 
@@ -150,7 +150,21 @@
   
   // Müziği başlat
   bgMusic.volume = 0.3;
-  bgMusic.play().catch(err => console.log('Müzik otomatik çalınamadı'));
+  let musicStarted = false;
+  
+  // İlk user interaction sonrası müzik başlat
+  function startMusicOnInteraction() {
+    if (!musicStarted && musicEnabled) {
+      bgMusic.play().then(() => {
+        musicStarted = true;
+      }).catch(err => console.log('Müzik çalınamadı'));
+    }
+    document.removeEventListener('click', startMusicOnInteraction);
+    document.removeEventListener('keydown', startMusicOnInteraction);
+  }
+  
+  document.addEventListener('click', startMusicOnInteraction);
+  document.addEventListener('keydown', startMusicOnInteraction);
   
   document.body.addEventListener('click', () => { if(!gameEnded) pointerControls.lock(); });
   pointerControls.addEventListener('lock', () => { 
@@ -179,14 +193,36 @@
 
   // --- Harita ve Seviye Sistemi ---
   const corridorLength = 24; const corridorWidth = 4; const corridorHeight = 3.5;
-  const wallMat = new THREE.MeshStandardMaterial({ color: 0x808080, side: THREE.DoubleSide });
-  const floorMat = new THREE.MeshStandardMaterial({ color: 0x333333, side: THREE.DoubleSide });
-  const ceilMat = new THREE.MeshStandardMaterial({ color: 0x111111, side: THREE.DoubleSide });
+  const wallMat = new THREE.MeshStandardMaterial({ 
+    color: 0x808080, 
+    side: THREE.DoubleSide,
+    fog: true
+  });
+  const floorMat = new THREE.MeshStandardMaterial({ 
+    color: 0x333333, 
+    side: THREE.DoubleSide,
+    fog: true
+  });
+  const ceilMat = new THREE.MeshStandardMaterial({ 
+    color: 0x111111, 
+    side: THREE.DoubleSide,
+    fog: true
+  });
 
   let currentLevelIndex = 0;
   let currentLevel = null;
   let levelObjects = []; 
   let guards = [];
+  
+  // Backdrop - duvarların arkasını kapatmak için
+  const backdropGeo = new THREE.BoxGeometry(200, 200, 200);
+  const backdropMat = new THREE.MeshBasicMaterial({ 
+    color: 0x0a0a0a,
+    fog: false,
+    side: THREE.BackSide
+  });
+  const backdrop = new THREE.Mesh(backdropGeo, backdropMat);
+  scene.add(backdrop);
 
   // Seviye Verileri
   const levels = [
@@ -264,44 +300,37 @@
     {
       name: "Zikzak Tünel",
       startPos: {x:0, y:1.6, z:20},
-      segments: [],
-      customBuild: function() {
-        // Dikey Giriş Koridoru (z: 0-24)
-        createCorridor(0, 12, 4, 24, 3.5, {gapZ: true, gapStart: -12, gapEnd: -10});
-        // Yatay Bağlantı (x: 0-24, z: 0)
-        createCorridor(12, 0, 24, 4, 3.5, {isHorizontal: true});
-        // Dikey İniş (z: -24-0)
-        createCorridor(24, -12, 4, 24, 3.5, {gapZ: true, gapStart: 10, gapEnd: 12});
-        // Yatay Dönüş (x: 0-24, z: -24)
-        createCorridor(12, -24, 24, 4, 3.5, {isHorizontal: true});
-        // Çıkış Koridoru (z: -48 - -24)
-        createCorridor(0, -36, 4, 24, 3.5, {gapZ: true, gapStart: 10, gapEnd: 12});
-      },
+      segments: [
+        {x:0, z:12, rot: 0},    // Giriş (Dikey 1)
+        {x:12, z:0, rot: Math.PI/2},   // Köşe (Yatay 1)
+        {x:24, z:-12, rot: 0},  // Orta (Dikey 2)
+        {x:12, z:-24, rot: Math.PI/2}, // Köşe (Yatay 2)
+        {x:0, z:-36, rot: 0}                   // Çıkış (Dikey 3)
+      ],
       walkable: [
-        {x1:-2, x2:2, z1:0, z2:24},
-        {x1:-2, x2:26, z1:-2, z2:2},
-        {x1:22, x2:26, z1:-26, z2:2},
-        {x1:-2, x2:26, z1:-26, z2:-22},
-        {x1:-2, x2:2, z1:-48, z2:-22}
+        {x1:-2, x2:2, z1:0, z2:24},       // Giriş dikey
+        {x1:0, x2:24, z1:-2, z2:2},       // Yatay 1
+        {x1:22, x2:26, z1:-24, z2:0},     // Orta dikey
+        {x1:0, x2:24, z1:-26, z2:-22},    // Yatay 2
+        {x1:-2, x2:2, z1:-48, z2:-24}     // Çıkış dikey
       ],
       paintings: [
-        {count:4, start:{x:-2, z:4}, step:{x:0, z:4}, rot:Math.PI/2, idStart:900},
-        {count:4, start:{x:4, z:2}, step:{x:4, z:0}, rot:Math.PI, idStart:910},
-        {count:4, start:{x:26, z:-4}, step:{x:0, z:-4}, rot:-Math.PI/2, idStart:920},
-        {count:4, start:{x:20, z:-26}, step:{x:-4, z:0}, rot:0, idStart:930}
+        {count:3, start:{x:-2, z:6}, step:{x:0, z:5}, rot:Math.PI/2, idStart:900},
+        {count:3, start:{x:5, z:2}, step:{x:6, z:0}, rot:Math.PI, idStart:910},
+        {count:3, start:{x:26, z:-6}, step:{x:0, z:-5}, rot:-Math.PI/2, idStart:920},
+        {count:3, start:{x:18, z:-26}, step:{x:-6, z:0}, rot:0, idStart:930}
       ],
       guards: [
         {color: 0xff00ff, wpIndex:0, dir:1},
-        {color: 0x00ffff, wpIndex:4, dir:-1}
+        {color: 0x00ffff, wpIndex:2, dir:-1}
       ],
       waypoints: [
-        // Zikzak rota - koridorların içinde
-        new THREE.Vector3(0, 0.9, 20),   // 0: Giriş üst
-        new THREE.Vector3(0, 0.9, 0),    // 1: Giriş alt / Yatay baş
-        new THREE.Vector3(24, 0.9, 0),   // 2: Yatay son / Dikey üst
-        new THREE.Vector3(24, 0.9, -24), // 3: Dikey alt / Yatay2 baş
-        new THREE.Vector3(0, 0.9, -24),  // 4: Yatay2 son / Çıkış üst
-        new THREE.Vector3(0, 0.9, -44)   // 5: Çıkış alt
+        new THREE.Vector3(0, 0.9, 18),     // 0: Giriş
+        new THREE.Vector3(0, 0.9, 0),      // 1: Giriş-Yatay 1 geçişi
+        new THREE.Vector3(24, 0.9, 0),     // 2: Yatay 1 sonu
+        new THREE.Vector3(24, 0.9, -24),   // 3: Orta dikey
+        new THREE.Vector3(0, 0.9, -24),    // 4: Yatay 2 sonu
+        new THREE.Vector3(0, 0.9, -42)     // 5: Çıkış
       ]
     },
     {
@@ -388,19 +417,34 @@
     
     if(!opts.noLeft) {
       const leftW = new THREE.Mesh(new THREE.PlaneGeometry(l, h), wallMat);
-      leftW.position.set(-w/2, h/2, 0); leftW.rotation.y = Math.PI / 2; group.add(leftW);
+      leftW.position.set(-w/2, h/2, 0); leftW.rotation.y = Math.PI / 2; 
+      // Arka duvar - kameraların arkasında görünmesin diye
+      const leftWBack = new THREE.Mesh(new THREE.PlaneGeometry(l, h), wallMat);
+      leftWBack.position.set(-w/2, h/2, 0); leftWBack.rotation.y = -Math.PI / 2; 
+      group.add(leftW);
+      group.add(leftWBack);
     }
     if(!opts.noRight) {
       const rightW = new THREE.Mesh(new THREE.PlaneGeometry(l, h), wallMat);
-      rightW.position.set(w/2, h/2, 0); rightW.rotation.y = -Math.PI / 2; group.add(rightW);
+      rightW.position.set(w/2, h/2, 0); rightW.rotation.y = -Math.PI / 2; 
+      // Arka duvar
+      const rightWBack = new THREE.Mesh(new THREE.PlaneGeometry(l, h), wallMat);
+      rightWBack.position.set(w/2, h/2, 0); rightWBack.rotation.y = Math.PI / 2; 
+      group.add(rightW);
+      group.add(rightWBack);
     }
     
-    // Ön ve Arka Duvarlar (Opsiyonel - Büyük odalar için)
-    if(opts.w) { // Özel boyutlu odalarda ön/arka duvar ekle
-       const frontW = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat);
-       frontW.position.set(0, h/2, -l/2); group.add(frontW);
-       const backW = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat);
-       backW.position.set(0, h/2, l/2); backW.rotation.y = Math.PI; group.add(backW);
+    // Ön ve Arka Duvarlar - Dar tüneller için (noLeft veya noRight true ise)
+    if(opts.noLeft || opts.noRight) {
+      const frontW = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat);
+      frontW.position.set(0, h/2, -l/2); group.add(frontW);
+      const frontWBack = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat);
+      frontWBack.position.set(0, h/2, -l/2 - 0.01); frontWBack.rotation.y = Math.PI; group.add(frontWBack);
+      
+      const backW = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat);
+      backW.position.set(0, h/2, l/2); backW.rotation.y = Math.PI; group.add(backW);
+      const backWBack = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat);
+      backWBack.position.set(0, h/2, l/2 + 0.01); group.add(backWBack);
     }
 
     scene.add(group);
@@ -427,6 +471,13 @@
       
       const backW = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat);
       backW.position.set(0, h/2, l/2); backW.rotation.y = Math.PI; group.add(backW);
+      
+      // Arka duvarlar (Double-side için)
+      const frontWBack = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat);
+      frontWBack.position.set(0, h/2, -l/2); frontWBack.rotation.y = Math.PI; group.add(frontWBack);
+      
+      const backWBack = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat);
+      backWBack.position.set(0, h/2, l/2); group.add(backWBack);
     } else {
       // Dikey koridor
       // Sol Duvar - 2 parça (ortada boşluk)
@@ -477,18 +528,26 @@
     // Sol Duvar
     const leftW = new THREE.Mesh(new THREE.PlaneGeometry(l, h), wallMat);
     leftW.position.set(-w/2, h/2, 0); leftW.rotation.y = Math.PI / 2; group.add(leftW);
+    const leftWBack = new THREE.Mesh(new THREE.PlaneGeometry(l, h), wallMat);
+    leftWBack.position.set(-w/2, h/2, 0); leftWBack.rotation.y = -Math.PI / 2; group.add(leftWBack);
     
     // Sağ Duvar
     const rightW = new THREE.Mesh(new THREE.PlaneGeometry(l, h), wallMat);
     rightW.position.set(w/2, h/2, 0); rightW.rotation.y = -Math.PI / 2; group.add(rightW);
+    const rightWBack = new THREE.Mesh(new THREE.PlaneGeometry(l, h), wallMat);
+    rightWBack.position.set(w/2, h/2, 0); rightWBack.rotation.y = Math.PI / 2; group.add(rightWBack);
     
     // Ön Duvar
     const frontW = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat);
     frontW.position.set(0, h/2, -l/2); group.add(frontW);
+    const frontWBack = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat);
+    frontWBack.position.set(0, h/2, -l/2); frontWBack.rotation.y = Math.PI; group.add(frontWBack);
     
     // Arka Duvar
     const backW = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat);
     backW.position.set(0, h/2, l/2); backW.rotation.y = Math.PI; group.add(backW);
+    const backWBack = new THREE.Mesh(new THREE.PlaneGeometry(w, h), wallMat);
+    backWBack.position.set(0, h/2, l/2); group.add(backWBack);
 
     scene.add(group);
     levelObjects.push(group);
