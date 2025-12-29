@@ -413,7 +413,9 @@
     floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; group.add(floor);
     
     const ceil = new THREE.Mesh(new THREE.PlaneGeometry(w, l), ceilMat);
-    ceil.rotation.x = Math.PI / 2; ceil.position.y = h; group.add(ceil);
+    ceil.rotation.x = Math.PI / 2; ceil.position.y = h; 
+    ceil.userData = { isCeiling: true };
+    group.add(ceil);
     
     if(!opts.noLeft) {
       const leftW = new THREE.Mesh(new THREE.PlaneGeometry(l, h), wallMat);
@@ -462,7 +464,9 @@
     
     // Tavan
     const ceil = new THREE.Mesh(new THREE.PlaneGeometry(w, l), ceilMat);
-    ceil.rotation.x = Math.PI / 2; ceil.position.y = h; group.add(ceil);
+    ceil.rotation.x = Math.PI / 2; ceil.position.y = h; 
+    ceil.userData = { isCeiling: true };
+    group.add(ceil);
 
     if(opts.isHorizontal) {
       // Yatay koridor - Ön ve Arka duvarlar (Z ekseninde)
@@ -523,7 +527,9 @@
     
     // Tavan
     const ceil = new THREE.Mesh(new THREE.PlaneGeometry(w, l), ceilMat);
-    ceil.rotation.x = Math.PI / 2; ceil.position.y = h; group.add(ceil);
+    ceil.rotation.x = Math.PI / 2; ceil.position.y = h; 
+    ceil.userData = { isCeiling: true };
+    group.add(ceil);
     
     // Sol Duvar
     const leftW = new THREE.Mesh(new THREE.PlaneGeometry(l, h), wallMat);
@@ -879,11 +885,26 @@
 
     renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
     renderer.setScissorTest(false); renderer.clear(); renderer.render(scene, camera);
+    
+    // Minimap Update
     const mapSize = 200;
+    miniCam.position.x = camera.position.x;
+    miniCam.position.z = camera.position.z;
+    
+    // Hide ceilings for minimap
+    scene.traverse(obj => {
+      if(obj.userData && obj.userData.isCeiling) obj.visible = false;
+    });
+
     renderer.clearDepth(); renderer.setScissorTest(true);
     renderer.setScissor(window.innerWidth - mapSize - 10, window.innerHeight - mapSize - 10, mapSize, mapSize);
     renderer.setViewport(window.innerWidth - mapSize - 10, window.innerHeight - mapSize - 10, mapSize, mapSize);
     renderer.render(scene, miniCam);
+
+    // Show ceilings back
+    scene.traverse(obj => {
+      if(obj.userData && obj.userData.isCeiling) obj.visible = true;
+    });
   }
   animate();
   window.addEventListener('resize', () => {
